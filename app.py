@@ -230,6 +230,7 @@ def api_step():
 
     if step == "push":
         token = payload.get("token", "").strip()
+        force = bool(payload.get("force", False))
         if not valid_repo(path):
             return jsonify(ok=False, message="No hay un repositorio Git válido.")
         if not token:
@@ -241,7 +242,7 @@ def api_step():
             return jsonify(ok=False, message="Este asistente usa autenticación por HTTPS. Configura origin con una URL https:// de GitHub.")
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
             askpass = f.name
-            f.write("#!/bin/sh\nprintf '%s\\n' \"$GIT_PASSWORD\"\n")
+            f.write("#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' \"$GIT_USERNAME\" ;;\n  *) printf '%s\\n' \"$GIT_PASSWORD\" ;;\nesac\n")
         os.chmod(askpass, 0o700)
         env = os.environ.copy()
         env["GIT_ASKPASS"] = askpass
@@ -249,7 +250,10 @@ def api_step():
         env["GIT_USERNAME"] = "git"
         env["GIT_PASSWORD"] = token
         try:
-            ok, out = run_command(["git", "-c", f"safe.directory={path}", "-C", path, "push", "-u", "origin", "main"], env=env, timeout=120)
+            push_args = ["push", "-u", "origin", "main"]
+            if force:
+                push_args.insert(1, "--force")
+            ok, out = run_command(["git", "-c", f"safe.directory={path}", "-C", path, *push_args], env=env, timeout=120)
         finally:
             try:
                 os.remove(askpass)

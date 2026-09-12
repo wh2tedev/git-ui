@@ -126,6 +126,10 @@ git init</pre>
         <p class="hint">Último paso: subimos la rama <code>main</code>. El token se usa solo durante este Push y no se guarda en el remoto.</p>
         <pre>git push -u origin main</pre>
         <input class="wide" id="gitToken" type="password" placeholder="Token de GitHub (PAT)">
+        <label style="display:flex;align-items:flex-start;gap:9px;margin:12px 0;color:#fbbf24;line-height:1.45;cursor:pointer;">
+            <input id="forcePush" type="checkbox" style="margin-top:3px;width:auto;">
+            <span><strong>Forzar Push / sobrescribir remoto</strong><br><small style="color:#94a3b8;">Usa <code>git push --force</code>. Reemplaza la rama <code>main</code> de GitHub con tu versión local. Úsalo solo si estás seguro.</small></span>
+        </label>
         <div class="form-grid"><button onclick="runStep('push', 9)">Hacer Push 🚀</button></div>
         <div class="result" id="result9"></div>
     </section>
@@ -174,7 +178,7 @@ async function runStep(action, step, formEvent) {
     if (action === 'identity') { payload.name = document.getElementById('gitName').value; payload.email = document.getElementById('gitEmail').value; }
     if (action === 'remote') payload.remote_url = document.getElementById('remoteUrl').value;
     if (action === 'commit') payload.message = document.getElementById('commitMessage').value;
-    if (action === 'push') payload.token = document.getElementById('gitToken').value;
+    if (action === 'push') { payload.token = document.getElementById('gitToken').value; payload.force = document.getElementById('forcePush').checked; }
 
     const result = document.getElementById('result' + step);
     result.textContent = '⏳ Ejecutando...';
