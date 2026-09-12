@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Git UI</title>
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0b0d11">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="git-ui">
+<link rel="icon" type="image/x-icon" href="/static/icons/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -116,6 +126,10 @@ git --version</pre>
     <!-- ---- ESTADO ---- -->
     <section class="tab-panel active" data-tab-panel="estado">
       <div class="statusbar" id="statusbar"></div>
+      <div class="conflict-banner" id="conflictBanner" style="display:none;">
+        <span id="conflictBannerText"></span>
+        <button class="btn-mini" id="conflictBannerBtn">Resolver</button>
+      </div>
 
       <div class="panel-row">
         <button class="btn btn-outline" id="pullBtn">↓ Pull</button>
@@ -136,7 +150,8 @@ git --version</pre>
 
       <div class="commitbox">
         <input type="text" id="commitMessage" placeholder="Mensaje del commit...">
-        <button class="btn btn-primary" id="commitBtn">Commit</button>
+        <button class="btn btn-outline" id="commitBtn">Commit</button>
+        <button class="btn btn-primary" id="commitPushBtn">Commit + Push</button>
       </div>
       <div class="result" id="result-commit"></div>
 

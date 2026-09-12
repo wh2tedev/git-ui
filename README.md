@@ -13,7 +13,52 @@ python -m pip install -r requirements.txt --break-system-packages
 python app.py
 ```
 
-Abre `http://127.0.0.1:5000` en el navegador del teléfono.
+Abre `http://127.0.0.1:5000` en el navegador del teléfono. Puedes tocar
+"Agregar a pantalla de inicio" en el navegador para instalarlo como app
+(PWA) con su propio ícono y sin la barra de direcciones.
+
+Para las notificaciones de Push (opcional):
+
+```bash
+pkg install termux-api
+```
+
+y también instala la app **Termux:API** desde F-Droid o Play Store. Si no
+la tienes instalada, la app funciona igual, simplemente no habrá
+notificación al terminar un Push.
+
+## Novedades de esta versión
+
+**Flujo de Commit + Push más claro.** El botón "Push" ahora avisa si tienes
+cambios sin preparar o sin commitear que no se van a subir. Y hay un botón
+nuevo, "Commit + Push", que hace ambas cosas en un solo paso — pensado
+justo para la duda de "¿necesito hacer commit antes?".
+
+**Conflictos de fusión, ya no un mensaje de error críptico.** Si un Pull
+encuentra un conflicto, la app lista los archivos afectados, te explica qué
+buscar (`<<<<<<<`, `=======`, `>>>>>>>`) y te deja terminarlo desde ahí:
+"Ya resolví, continuar" (verifica que ya quitaste las marcas antes de dejarte
+seguir) o "Cancelar merge" para volver atrás sin aplicar nada. Si cierras la
+app a medio resolver, al volver a abrirla el panel te lo recuerda.
+
+**El token de GitHub se puede recordar por la sesión.** Al hacer Push hay un
+casillero "Recordar el token para esta sesión" — si lo marcas, no hace falta
+pegarlo de nuevo mientras la pestaña siga abierta. Nunca se guarda en disco;
+se pierde en cuanto recargas la página o cierras el navegador.
+
+**Soporte para SSH, no solo HTTPS.** Si configuras origin con una URL SSH
+(`git@github.com:usuario/repo.git`), la app detecta el esquema y usa
+directamente la llave que ya tengas configurada en Termux — no te pide
+ningún token. Todo lo de HTTPS + token sigue funcionando igual que antes
+para quien no use SSH.
+
+**Se puede instalar como app (PWA).** Ícono propio (el "$" naranja de la
+barra superior) tanto en la pestaña del navegador como en la pantalla de
+inicio si la agregas ahí.
+
+**Notificación de Termux al terminar un Push**, si tienes `termux-api`
+instalado (ver arriba). Sin eso, todo sigue funcionando, solo sin la
+notificación nativa.
 
 ## Qué cambió respecto a la versión anterior
 
@@ -70,8 +115,11 @@ estuviera configurado. Ahora:
 
 - El token de GitHub nunca se guarda en la URL del remoto ni en disco;
   se usa solo en memoria durante el Push/Clone vía `GIT_ASKPASS` temporal.
+  Si activas "recordar para esta sesión", sigue siendo solo memoria del
+  navegador — se pierde al recargar o cerrar la pestaña.
 - Las URLs remotas con credenciales se muestran siempre ocultando el
   secreto.
 - `debug` desactivado.
-- Push solo admite remotos `https://`, por diseño (evita depender de
-  claves SSH configuradas en Termux).
+- Push admite remotos `https://` (con token) o `git@`/`ssh://` (con tu
+  llave SSH ya configurada en Termux) — se detecta automáticamente según
+  la URL de origin.

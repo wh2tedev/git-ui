@@ -264,6 +264,20 @@ textarea { resize: vertical; width: 100%; }
 .statusbar .flag-behind { color: var(--red); }
 .statusbar .flag-clean { color: var(--green); }
 
+.conflict-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border-left: 3px solid var(--red);
+  background: var(--red-bg);
+  color: #f0c7c7;
+  font-size: 0.86em;
+}
+
 /* ---- file lists ---- */
 .filegroup { margin-top: 18px; }
 .filegroup-head {

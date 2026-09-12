@@ -31,6 +31,7 @@ def bundle(path):
         "stashes": gitops.list_stashes(path),
         "gitignore": gitops.read_gitignore(path) if data["is_git"] else "",
         "recents": store.load_recents(),
+        "conflicts": gitops.conflicted_files(path) if data["is_git"] else [],
     }
 
 
@@ -228,6 +229,25 @@ def api_commit():
     return jsonify(ok=ok, message=out)
 
 
+@app.route("/api/commit_and_push", methods=["POST"])
+def api_commit_and_push():
+    payload = _payload()
+    path = _path_from(payload)
+    message = (payload.get("message") or "").strip()
+    token = (payload.get("token") or "").strip()
+    force = bool(payload.get("force", False))
+    branch = (payload.get("branch") or "").strip() or None
+    if not message:
+        return jsonify(ok=False, step="commit", message="Escribe un mensaje para el commit.")
+    if not _require_repo(path):
+        return jsonify(ok=False, step="commit", message="No hay un repositorio Git válido.")
+    ok, out = gitops.commit(path, message)
+    if not ok:
+        return jsonify(ok=False, step="commit", message=out)
+    ok, out = gitops.push(path, token, branch=branch, force=force)
+    return jsonify(ok=ok, step="push", message=out)
+
+
 @app.route("/api/pull", methods=["POST"])
 def api_pull():
     payload = _payload()
@@ -235,7 +255,45 @@ def api_pull():
     if not _require_repo(path):
         return jsonify(ok=False, message="No hay un repositorio Git válido.")
     ok, out = gitops.pull(path)
+    if not ok:
+        conflicts = gitops.conflicted_files(path)
+        if conflicts:
+            return jsonify(ok=False, message=out, conflict=True, files=conflicts)
     return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/conflicts/resolve", methods=["POST"])
+def api_conflicts_resolve():
+    """Called after the user has edited the conflicted files by hand (e.g. in
+    Acode) and wants to mark them resolved and finish the merge with a commit."""
+    payload = _payload()
+    path = _path_from(payload)
+    message = (payload.get("message") or "Merge").strip()
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    targets = gitops.conflicted_files(path)
+    if not targets:
+        return jsonify(ok=False, message="No hay conflictos pendientes.")
+    still_marked = gitops.files_still_have_markers(path, targets)
+    if still_marked:
+        return jsonify(
+            ok=False,
+            message="Todavía tienen marcadores de conflicto (<<<<<<<) sin quitar: " + ", ".join(still_marked),
+            files=still_marked,
+        )
+    gitops.add_files(path, targets)
+    ok, out = gitops.commit(path, message)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/conflicts/abort", methods=["POST"])
+def api_conflicts_abort():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.abort_merge(path)
+    return jsonify(ok=ok, message=out if out else "Merge cancelado. Tu rama vuelve al estado anterior.")
 
 
 @app.route("/api/push", methods=["POST"])

@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const state = { path: "", bundle: null, activeTab: "estado" };
+  const state = { path: "", bundle: null, activeTab: "estado", rememberedToken: "" };
 
   // ------------------------------------------------------------- helpers --
 
@@ -243,6 +243,7 @@
 
   function renderDashboard(data) {
     renderStatusbar(data.status);
+    renderConflictBanner(data);
     renderFileGroups(data.files);
     renderStashes(data.stashes);
     renderBranches(data.branches);
@@ -251,6 +252,21 @@
     document.getElementById("cfgEmail").value = data.status.email || "";
     document.getElementById("cfgRemote").value = data.status.remote || "";
     document.getElementById("cfgGitignore").value = data.gitignore || "";
+  }
+
+  function renderConflictBanner(data) {
+    const banner = document.getElementById("conflictBanner");
+    const conflicts = data.conflicts || [];
+    if (!data.status.merging && !conflicts.length) {
+      banner.style.display = "none";
+      return;
+    }
+    banner.style.display = "flex";
+    document.getElementById("conflictBannerText").textContent =
+      conflicts.length
+        ? "Fusión sin terminar: " + conflicts.length + " archivo(s) con conflicto."
+        : "Hay una fusión sin terminar.";
+    document.getElementById("conflictBannerBtn").onclick = () => openConflictModal(conflicts);
   }
 
   function renderStatusbar(s) {
@@ -264,7 +280,7 @@
     } else if (s.ahead === 0 && s.behind === 0) {
       parts.push(el("span", { class: "flag-clean" }, [text("sincronizado")]));
     }
-    parts.push(el("span", {}, [text(s.remote ? "origin: " + s.remote_masked : "sin remoto configurado")]));
+    parts.push(el("span", {}, [text(s.remote ? "origin: " + s.remote_masked + (s.remote_scheme ? " (" + s.remote_scheme.toUpperCase() + ")" : "") : "sin remoto configurado")]));
     if (!s.has_commits) parts.push(el("span", {}, [text("sin commits todavía")]));
     parts.forEach((p) => bar.appendChild(p));
   }
@@ -342,9 +358,21 @@
     if (res.ok) { input.value = ""; refreshDashboard(); }
   });
 
+  document.getElementById("commitPushBtn").addEventListener("click", () => {
+    const input = document.getElementById("commitMessage");
+    const message = input.value.trim();
+    if (!message) { showResult("result-commit", false, "Escribe un mensaje para el commit."); return; }
+    openPushModal(message);
+  });
+
   document.getElementById("pullBtn").addEventListener("click", async () => {
     showPending("result-syncop", "Descargando cambios...");
     const res = await api("/api/pull", { repo_path: state.path });
+    if (res.conflict) {
+      showResult("result-syncop", false, "Hay conflictos de fusión. Resuélvelos abajo.");
+      refreshBundle().then(() => openConflictModal(res.files || []));
+      return;
+    }
     showResult("result-syncop", res.ok, res.message);
     if (res.ok) refreshDashboard();
   });
@@ -489,13 +517,34 @@
 
   // ---------------------------------------------------------------- push --
 
-  function openPushModal() {
+  function openPushModal(commitMessage) {
     const branch = (state.bundle.status.branch || "main");
+    const scheme = state.bundle.status.remote_scheme;
+    const isCommitPush = !!commitMessage;
+
+    let authHtml;
+    if (scheme === "ssh") {
+      authHtml = '<p class="muted" style="margin:0 0 4px;">Se usará tu llave SSH configurada en Termux — no necesitas token aquí.</p>';
+    } else {
+      authHtml = `
+        <input type="password" id="pushToken" placeholder="Token de GitHub (PAT)" value="${esc(state.rememberedToken)}">
+        <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:0.85em;cursor:pointer;">
+          <input id="rememberToken" type="checkbox" style="width:auto;" ${state.rememberedToken ? "checked" : ""}>
+          <span>Recordar el token para esta sesión</span>
+        </label>`;
+    }
+
+    let warningHtml = "";
+    if (!isCommitPush && state.bundle.status.has_changes) {
+      warningHtml = '<p style="color:var(--amber);font-size:0.85em;margin:0 0 10px;">Tienes cambios sin preparar o sin commitear que no se subirán con este Push.</p>';
+    }
+
     openModal({
-      title: "Push a GitHub",
+      title: isCommitPush ? "Commit + Push" : "Push a GitHub",
       bodyHtml: `
+        ${warningHtml}
         <div class="field-col">
-          <input type="password" id="pushToken" placeholder="Token de GitHub (PAT)">
+          ${authHtml}
           <label style="display:flex;align-items:flex-start;gap:9px;color:var(--amber);font-size:0.85em;cursor:pointer;">
             <input id="pushForce" type="checkbox" style="width:auto;margin-top:3px;">
             <span>Forzar push (sobrescribe la rama <b>${esc(branch)}</b> en GitHub). Úsalo solo si estás seguro.</span>
@@ -504,16 +553,78 @@
       actions: [
         { label: "Cancelar", cls: "btn-ghost", onClick: closeModal },
         {
-          label: "Hacer Push", cls: "btn-primary", onClick: async () => {
-            const token = document.getElementById("pushToken").value.trim();
+          label: isCommitPush ? "Commit + Push" : "Hacer Push", cls: "btn-primary", onClick: async () => {
+            let token = "";
+            if (scheme !== "ssh") {
+              token = document.getElementById("pushToken").value.trim();
+              const remember = document.getElementById("rememberToken").checked;
+              state.rememberedToken = remember ? token : "";
+              if (!token) return;
+            }
             const force = document.getElementById("pushForce").checked;
-            if (!token) return;
-            document.getElementById("modalBody").innerHTML = '<p class="muted">Subiendo a GitHub...</p>';
+            document.getElementById("modalBody").innerHTML =
+              '<p class="muted">' + (isCommitPush ? "Guardando commit y subiendo a GitHub..." : "Subiendo a GitHub...") + '</p>';
             document.getElementById("modalActions").innerHTML = "";
-            const res = await api("/api/push", { repo_path: state.path, token, force, branch });
+
+            let res;
+            if (isCommitPush) {
+              res = await api("/api/commit_and_push", { repo_path: state.path, message: commitMessage, token, force, branch });
+            } else {
+              res = await api("/api/push", { repo_path: state.path, token, force, branch });
+            }
             closeModal();
-            showResult("result-syncop", res.ok, res.message);
-            if (res.ok) refreshDashboard();
+            const resultBox = isCommitPush ? "result-commit" : "result-syncop";
+            showResult(resultBox, res.ok, res.message);
+            if (res.ok) {
+              if (isCommitPush) document.getElementById("commitMessage").value = "";
+              refreshDashboard();
+            }
+          },
+        },
+      ],
+    });
+  }
+
+  // ------------------------------------------------------------ conflicts --
+
+  function openConflictModal(files) {
+    const listHtml = files.length
+      ? "<ul>" + files.map((f) => "<li>" + esc(f) + "</li>").join("") + "</ul>"
+      : "<p class=\"muted\">No hay archivos en conflicto listados, pero la fusión sigue abierta.</p>";
+    openModal({
+      title: "Conflicto de fusión",
+      bodyHtml: `
+        <p>Abre estos archivos en Acode (u otro editor), busca las marcas <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>,
+        <code>=======</code> y <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code>, y deja el contenido que quieras conservar.
+        Cuando termines, vuelve aquí:</p>
+        ${listHtml}
+        <div class="field-col">
+          <input type="text" id="mergeMessage" placeholder="Mensaje del commit de fusión" value="Merge remote changes">
+        </div>
+        <div class="result" id="result-conflict"></div>`,
+      actions: [
+        {
+          label: "Cancelar merge", cls: "btn-danger", onClick: () => confirmDestructive(
+            "Cancelar la fusión",
+            "Tu rama volverá al estado de antes del Pull. Los cambios remotos no se aplicarán.",
+            async () => {
+              const res = await api("/api/conflicts/abort", { repo_path: state.path });
+              showResult("result-syncop", res.ok, res.message);
+              if (res.ok) refreshDashboard();
+            }
+          ),
+        },
+        {
+          label: "Ya resolví, continuar", cls: "btn-primary", onClick: async () => {
+            const message = document.getElementById("mergeMessage").value.trim() || "Merge";
+            const res = await api("/api/conflicts/resolve", { repo_path: state.path, message });
+            if (!res.ok) {
+              showResult("result-conflict", false, res.message);
+              return;
+            }
+            closeModal();
+            showResult("result-syncop", true, res.message);
+            refreshDashboard();
           },
         },
       ],

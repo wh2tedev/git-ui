@@ -141,11 +141,13 @@ def status_data(path):
         "email": "",
         "remote": "",
         "remote_masked": "No configurado",
+        "remote_scheme": "",
         "branch": "",
         "has_changes": False,
         "has_commits": False,
         "ahead": None,
         "behind": None,
+        "merging": False,
     }
     if not data["git_installed"] or not data["is_git"]:
         return data
@@ -157,6 +159,8 @@ def status_data(path):
     ok, out = git(["remote", "get-url", "origin"], path, allow_error=True)
     data["remote"] = out if ok else ""
     data["remote_masked"] = mask_url(out) if ok else "No configurado"
+    data["remote_scheme"] = remote_scheme(data["remote"])
+    data["merging"] = merge_in_progress(path)
     branch = current_branch(path)
     data["branch"] = branch or "(sin rama)"
     ok, out = git(["status", "--short"], path, allow_error=True)
@@ -369,7 +373,61 @@ def stash_drop(path, ref="stash@{0}"):
 
 
 def pull(path):
-    return git(["pull"], path, timeout=120)
+    # --no-rebase pins the strategy to a plain merge regardless of the
+    # user's global git config. Without this, modern Git refuses to pull at
+    # all on diverged branches ("Need to specify how to reconcile divergent
+    # branches") before ever attempting a merge — which would hide real
+    # conflicts behind a confusing git-config wall of text instead of
+    # reaching our conflict-resolution UI.
+    ok, out = git(["pull", "--no-rebase"], path, timeout=120)
+    return ok, out if out else "Ya estás al día."
+
+
+def merge_in_progress(path):
+    return os.path.isfile(os.path.join(path, ".git", "MERGE_HEAD"))
+
+
+def conflicted_files(path):
+    """Files with unresolved merge conflicts (git diff --diff-filter=U)."""
+    ok, out = git(["diff", "--name-only", "--diff-filter=U"], path, allow_error=True)
+    if not ok or not out:
+        return []
+    return [line for line in out.split("\n") if line.strip()]
+
+
+_CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
+
+
+def files_still_have_markers(path, files):
+    """Of the given files, which still contain literal <<<<<<< conflict
+    markers in their content — i.e. haven't actually been hand-edited yet,
+    even though Git still lists them as unmerged either way."""
+    still = []
+    for f in files:
+        full = os.path.join(path, f)
+        try:
+            with open(full, "r", encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+            if any(marker in content for marker in _CONFLICT_MARKERS):
+                still.append(f)
+        except OSError:
+            continue
+    return still
+
+
+def abort_merge(path):
+    return git(["merge", "--abort"], path)
+
+
+def remote_scheme(url):
+    """'ssh', 'https', or '' (no remote / unrecognized)."""
+    if not url:
+        return ""
+    if url.startswith(("git@", "ssh://")):
+        return "ssh"
+    if url.startswith(("https://", "http://")):
+        return "https"
+    return ""
 
 
 def clone_repo(path, url, token=""):
@@ -381,7 +439,7 @@ def clone_repo(path, url, token=""):
         return False, f"La carpeta destino ya existe y no está vacía: {path}"
     env = None
     askpass = None
-    if token and url.startswith(("https://", "http://")):
+    if token and remote_scheme(url) == "https":
         askpass, env = _askpass_env(token)
     try:
         ok, out = git(["clone", url, target_name], repo_path=parent, timeout=180, env=env)
@@ -407,6 +465,19 @@ def _askpass_env(token):
     return askpass, env
 
 
+def notify_termux(title, message):
+    """Best-effort Termux:API notification. Silently does nothing if not installed."""
+    if not shutil.which("termux-notification"):
+        return
+    try:
+        subprocess.run(
+            ["termux-notification", "--title", title, "--content", message],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def push(path, token, branch=None, force=False, set_upstream=True):
     if not branch:
         branch = current_branch(path)
@@ -415,12 +486,20 @@ def push(path, token, branch=None, force=False, set_upstream=True):
     remote_ok, remote = git(["remote", "get-url", "origin"], path, allow_error=True)
     if not remote_ok or not remote:
         return False, "No hay un remoto 'origin' configurado."
-    if not remote.startswith(("https://", "http://")):
-        return False, "Este asistente usa autenticación por HTTPS. Configura origin con una URL https:// de GitHub."
-    if not token:
-        return False, "Introduce tu token de GitHub para hacer Push."
 
-    askpass, env = _askpass_env(token)
+    scheme = remote_scheme(remote)
+    if scheme == "":
+        return False, "El remoto configurado no es una URL https:// ni ssh:// reconocida."
+
+    env = None
+    askpass = None
+    if scheme == "https":
+        if not token:
+            return False, "Introduce tu token de GitHub para hacer Push."
+        askpass, env = _askpass_env(token)
+    # scheme == "ssh": no token needed — relies on the SSH key already set up
+    # in Termux (ssh-agent or a key file Git/OpenSSH is configured to use).
+
     try:
         push_args = ["push"]
         if set_upstream:
@@ -433,10 +512,15 @@ def push(path, token, branch=None, force=False, set_upstream=True):
             env=env, timeout=120,
         )
     finally:
-        try:
-            os.remove(askpass)
-        except OSError:
-            pass
+        if askpass:
+            try:
+                os.remove(askpass)
+            except OSError:
+                pass
+
     if not ok and ("rejected" in out.lower() or "non-fast-forward" in out.lower() or "fetch first" in out.lower()):
         out += "\n\nGitHub tiene commits que no están en tu copia local. Usa «Pull» antes de volver a intentar el Push (o Push forzado si quieres sobrescribir GitHub)."
+    if not ok and scheme == "ssh" and ("permission denied" in out.lower() or "publickey" in out.lower()):
+        out += "\n\nTermux no pudo autenticarse por SSH. Revisa que tu llave esté cargada (ssh-add) y agregada en GitHub."
+    notify_termux("Git UI", ("Push completado: " if ok else "Push falló: ") + branch)
     return ok, out if out else "Push completado."
