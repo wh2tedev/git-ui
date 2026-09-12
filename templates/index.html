@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git Web Dashboard</title>
+    <style>
+        body { font-family: monospace; background: #0f172a; color: #e2e8f0; padding: 20px; max-width: 950px; margin: auto; }
+        h1, h2 { color: #38bdf8; }
+        .card { background: #1e293b; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        pre { background: #090d16; padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+        button, input { background: #38bdf8; border: none; padding: 10px 15px; border-radius: 4px; color: #0f172a; font-weight: bold; cursor: pointer; }
+        button:hover { background: #7dd3fc; }
+        button:disabled { opacity: .45; cursor: not-allowed; }
+        input[type="text"], input[type="password"] { background: #334155; color: white; width: 65%; padding: 10px; border-radius: 4px; border: 1px solid #475569; box-sizing: border-box; }
+        .form-grid { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+        .alert { background: #1e293b; color: #38bdf8; padding: 15px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; border: 1px solid #38bdf8; white-space: pre-wrap; word-break: break-all; }
+        .progress { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; margin: 18px 0; }
+        .dot { background: #334155; border-radius: 4px; padding: 8px 4px; text-align: center; color: #94a3b8; font-size: 12px; }
+        .dot.active { background: #38bdf8; color: #0f172a; }
+        .dot.done { background: #166534; color: #dcfce7; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .step.locked { opacity: .55; }
+        .step-number { color: #38bdf8; font-weight: bold; }
+        .hint { color: #94a3b8; line-height: 1.5; }
+        code { color: #7dd3fc; }
+        .result { margin-top: 12px; padding: 10px; background: #090d16; border-radius: 4px; white-space: pre-wrap; word-break: break-word; display: none; }
+        .result.show { display: block; }
+        .success { border-left: 3px solid #4ade80; }
+        .error { border-left: 3px solid #f87171; }
+        .wide { width: 100% !important; }
+        @media (max-width: 650px) { body { padding: 12px; } .progress { grid-template-columns: repeat(3, 1fr); } input[type="text"], input[type="password"] { width: 100% !important; } button { width: 100%; } }
+    </style>
+</head>
+<body>
+    <h1>Git Dashboard</h1>
+    <div class="alert" id="topStatus">Sigue los pasos en orden. La web comprobará cada paso antes de desbloquear el siguiente.</div>
+
+    <div style="margin-bottom:10px; color:#94a3b8; font-size:12px;">La barra superior muestra tu progreso real. Si un paso falla, no se desbloquea el siguiente.</div>
+
+    <div class="progress" id="progress">
+        <div class="dot active">1<br>Git</div><div class="dot">2<br>Carpeta</div><div class="dot">3<br>Init</div>
+        <div class="dot">4<br>Identidad</div><div class="dot">5<br>GitHub</div><div class="dot">6<br>Add</div>
+        <div class="dot">7<br>Commit</div><div class="dot">8<br>Main</div><div class="dot">9<br>Push</div>
+    </div>
+
+    <section class="card step active" data-step="1">
+        <h2><span class="step-number">PASO 1 —</span> Comprobar Git</h2>
+        <p class="hint">Primero comprobamos que Git exista en Termux.</p>
+        <pre>pkg update
+pkg install git
+git --version</pre>
+        <button onclick="runStep('check_git', 1)">Comprobar Git</button>
+        <div class="result" id="result1"></div>
+    </section>
+
+    <section class="card step" data-step="2">
+        <h2><span class="step-number">PASO 2 —</span> Elegir carpeta del proyecto</h2>
+        <p class="hint">Esta ruta manda. La app ejecutará Git <strong>exactamente aquí</strong>; no usará la carpeta donde está instalada la web.</p>
+        <form onsubmit="return runStep('choose_folder', 2, event)">
+            <input class="wide" id="repoPath" type="text" value="{{ repo_path }}" placeholder="/sdcard/Download/projects/mi-proyecto" required>
+            <div class="form-grid"><button type="submit">Cargar carpeta</button></div>
+        </form>
+        <div class="result" id="result2"></div>
+    </section>
+
+    <section class="card step" data-step="3">
+        <h2><span class="step-number">PASO 3 —</span> Inicializar Git</h2>
+        <p class="hint">Equivale a ejecutar <code>git init</code> dentro de la carpeta.</p>
+        <pre id="initCommand">cd {{ repo_path }}
+git init</pre>
+        <button onclick="runStep('init', 3)">Inicializar Git</button>
+        <div class="result" id="result3"></div>
+    </section>
+
+    <section class="card step" data-step="4">
+        <h2><span class="step-number">PASO 4 —</span> Configurar identidad</h2>
+        <p class="hint">Estos datos se guardan dentro de este repositorio, igual que usando <code>git config --local</code> en Termux.</p>
+        <form onsubmit="return runStep('identity', 4, event)">
+            <div class="form-grid">
+                <input id="gitName" type="text" placeholder="Tu nombre" value="{{ data.name }}" required>
+                <input id="gitEmail" type="text" placeholder="tu-correo@example.com" value="{{ data.email }}" required>
+            </div>
+            <div class="form-grid"><button type="submit">Guardar identidad</button></div>
+        </form>
+        <div class="result" id="result4"></div>
+    </section>
+
+    <section class="card step" data-step="5">
+        <h2><span class="step-number">PASO 5 —</span> Conectar repositorio de GitHub</h2>
+        <p class="hint">Crea el repositorio vacío en GitHub y pega aquí su URL HTTPS.</p>
+        <pre>git remote add origin https://github.com/USUARIO/REPOSITORIO.git</pre>
+        <input class="wide" id="remoteUrl" type="text" placeholder="https://github.com/tu-usuario/tu-repo.git" value="">
+        <div class="form-grid"><button onclick="runStep('remote', 5)">Vincular GitHub</button></div>
+        <div class="result" id="result5"></div>
+    </section>
+
+    <section class="card step" data-step="6">
+        <h2><span class="step-number">PASO 6 —</span> Preparar archivos</h2>
+        <p class="hint">Ahora añadimos todos los archivos con <code>git add .</code>.</p>
+        <pre>git add .</pre>
+        <button onclick="runStep('add', 6)">Hacer Git Add</button>
+        <div class="result" id="result6"></div>
+    </section>
+
+    <section class="card step" data-step="7">
+        <h2><span class="step-number">PASO 7 —</span> Crear el commit</h2>
+        <p class="hint">El commit guarda una versión de los cambios preparados.</p>
+        <pre>git commit -m "Tu mensaje"</pre>
+        <input class="wide" id="commitMessage" type="text" placeholder="Mensaje del commit..." value="Initial commit">
+        <div class="form-grid"><button onclick="runStep('commit', 7)">Crear commit</button></div>
+        <div class="result" id="result7"></div>
+    </section>
+
+    <section class="card step" data-step="8">
+        <h2><span class="step-number">PASO 8 —</span> Establecer la rama main</h2>
+        <p class="hint">Dejamos la rama principal con el nombre <code>main</code>.</p>
+        <pre>git branch -M main</pre>
+        <button onclick="runStep('branch', 8)">Usar main</button>
+        <div class="result" id="result8"></div>
+    </section>
+
+    <section class="card step" data-step="9">
+        <h2><span class="step-number">PASO 9 —</span> Push a GitHub</h2>
+        <p class="hint">Último paso: subimos la rama <code>main</code>. El token se usa solo durante este Push y no se guarda en el remoto.</p>
+        <pre>git push -u origin main</pre>
+        <input class="wide" id="gitToken" type="password" placeholder="Token de GitHub (PAT)">
+        <div class="form-grid"><button onclick="runStep('push', 9)">Hacer Push 🚀</button></div>
+        <div class="result" id="result9"></div>
+    </section>
+
+    <section class="card" id="finalCard" style="display:none;">
+        <h2>✅ Repositorio listo</h2>
+        <p>Tu proyecto terminó el flujo completo y fue enviado a GitHub.</p>
+        <pre id="finalInfo"></pre>
+    </section>
+
+<script>
+let currentStep = 1;
+const completed = new Set();
+
+function repoPath() { return document.getElementById('repoPath').value.trim(); }
+function updateRepoPathText(path) {
+    const el = document.getElementById('initCommand');
+    if (el) el.textContent = 'cd ' + path + '\ngit init';
+}
+
+
+function showResult(step, ok, message) {
+    const el = document.getElementById('result' + step);
+    el.textContent = (ok ? '✓ ' : '✕ ') + message;
+    el.className = 'result show ' + (ok ? 'success' : 'error');
+}
+
+function updateProgress() {
+    document.querySelectorAll('.dot').forEach((dot, i) => {
+        const n = i + 1;
+        dot.classList.toggle('active', n === currentStep);
+        dot.classList.toggle('done', completed.has(n));
+    });
+}
+
+function goToStep(n) {
+    currentStep = n;
+    document.querySelectorAll('.step').forEach(s => s.classList.toggle('active', Number(s.dataset.step) === n));
+    updateProgress();
+    window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+async function runStep(action, step, formEvent) {
+    if (formEvent && formEvent.preventDefault) formEvent.preventDefault();
+    const payload = {step: action, repo_path: repoPath()};
+    if (action === 'identity') { payload.name = document.getElementById('gitName').value; payload.email = document.getElementById('gitEmail').value; }
+    if (action === 'remote') payload.remote_url = document.getElementById('remoteUrl').value;
+    if (action === 'commit') payload.message = document.getElementById('commitMessage').value;
+    if (action === 'push') payload.token = document.getElementById('gitToken').value;
+
+    const result = document.getElementById('result' + step);
+    result.textContent = '⏳ Ejecutando...';
+    result.className = 'result show';
+    try {
+        const response = await fetch('/api/step', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        const data = await response.json();
+        showResult(step, data.ok, data.message);
+        if (!data.ok) return false;
+        if (step === 2 && data.path) {
+            document.getElementById('repoPath').value = data.path;
+            updateRepoPathText(data.path);
+        }
+        completed.add(step);
+
+        // After initializing Git, ask the server to verify the repository
+        // really exists on disk before advancing. This prevents a green UI
+        // state when the next backend check would fail.
+        if (step === 3) {
+            const check = await fetch('/api/status', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({repo_path: repoPath()})
+            });
+            const state = await check.json();
+            if (!state.is_git) {
+                completed.delete(3);
+                showResult(3, false, 'Git init no quedó disponible en esta carpeta. Revisa la ruta y vuelve a intentarlo.');
+                return false;
+            }
+        }
+        if (step < 9) goToStep(step + 1);
+        else {
+            document.getElementById('finalCard').style.display = 'block';
+            document.getElementById('finalInfo').textContent = 'Ruta: ' + repoPath() + '\nRepositorio: ' + (document.getElementById('remoteUrl').value || 'origin') + '\nRama: main';
+            document.getElementById('topStatus').textContent = '✓ Flujo completado correctamente.';
+        }
+        return false;
+    } catch (e) {
+        showResult(step, false, 'No se pudo comunicar con la aplicación: ' + e.message);
+        return false;
+    }
+}
+</script>
+</body>
+</html>
