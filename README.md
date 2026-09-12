@@ -1,27 +1,77 @@
 # Git UI
 
-Panel web local para gestionar un repositorio Git desde Termux.
+Panel web local para gestionar un repositorio Git desde Termux — ahora es
+un panel de uso diario, no solo un asistente de primer commit.
 
-## Termux
+## Uso en Termux
 
 ```bash
 pkg update
 pkg install git python
 cd ~/git-ui
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt --break-system-packages
 python app.py
 ```
 
-Luego abre `http://127.0.0.1:5000`.
+Abre `http://127.0.0.1:5000` en el navegador del teléfono.
 
-## Mejoras
+## Qué cambió respecto a la versión anterior
 
-- Validación de repositorios antes de ejecutar comandos.
-- Expansión de `~` y rutas absolutas.
-- Manejo de errores de Git, Git ausente y timeouts.
-- `debug` desactivado por seguridad.
-- El PAT de GitHub ya **no se guarda en la URL del remoto**.
-- Autenticación de `push` mediante `GIT_ASKPASS` temporal.
-- URLs remotas con credenciales se muestran ocultando el secreto.
-- Validación de acciones y mensajes de commit vacíos.
-- Mantiene el diseño y la estructura visual originales.
+**Ya no es un asistente de un solo uso.** Antes, cada vez que abrías la app
+tenías que repetir los 9 pasos del asistente aunque el repositorio ya
+estuviera configurado. Ahora:
+
+- Recuerda los proyectos que abriste antes (guardado en
+  `~/.config/git-ui/recents.json`), con acceso rápido desde la pantalla de
+  inicio.
+- Al abrir un proyecto, la app detecta qué falta configurar y **salta
+  automáticamente** los pasos ya hechos (Git instalado, repo inicializado,
+  identidad, remoto). El asistente solo aparece para lo que realmente falta.
+- Una vez configurado, entras directo a un **Panel** con pestañas: Estado,
+  Ramas, Historial, Config — no a un asistente lineal.
+
+**Panel nuevo (antes no existía nada de esto):**
+- Ver archivos preparados / sin preparar / sin seguimiento por separado,
+  con acciones individuales (preparar, quitar, descartar, eliminar).
+- Ver el diff de cualquier archivo tocándolo.
+- Pull, además del Push que ya existía.
+- Ramas: crear, cambiar, eliminar, ver cuál está activa.
+- Stash: guardar, aplicar, borrar.
+- Historial de commits (hash, autor, fecha, mensaje).
+- Editor rápido de `.gitignore`.
+- Clonar un repositorio de GitHub existente, no solo inicializar uno nuevo.
+- Confirmación antes de cualquier acción destructiva (descartar cambios,
+  eliminar archivo sin seguimiento, eliminar rama, borrar stash).
+
+**Bugs corregidos:**
+- El Push estaba fijo a la rama `main` sin importar en qué rama estuvieras;
+  ahora empuja la rama actual real.
+- Si el Push era rechazado por *non-fast-forward*, el error de Git se
+  mostraba tal cual, sin indicar qué hacer; ahora se detecta y sugiere usar
+  Pull primero (o forzar, con confirmación).
+- Un mensaje de relleno para salidas vacías de Git terminaba, en ciertos
+  casos, interpretado como si fuera parte del estado del repositorio, lo
+  que producía archivos y ramas "fantasma" en un repo limpio. Corregido.
+- El parseo de `git status` recortaba el espacio inicial de cada línea,
+  lo que desplazaba el nombre de cada archivo un carácter (`main.py` se
+  leía como `ain.py`) y podía marcar como "preparado" un archivo que en
+  realidad no lo estaba. Corregido.
+- El estado del proyecto ya no se pierde al cerrar Termux: se guarda en
+  disco en vez de vivir solo en memoria.
+
+**Estructura del código** — ahora modular en vez de un solo archivo:
+- `app.py` — rutas Flask (capa fina).
+- `gitops.py` — toda la lógica de Git/subprocess.
+- `store.py` — persistencia de proyectos recientes.
+- `templates/index.html` + `static/style.css` + `static/app.js` — antes
+  todo estaba en una sola plantilla con CSS y JS en línea.
+
+## Notas de seguridad (igual que antes, sin cambios de fondo)
+
+- El token de GitHub nunca se guarda en la URL del remoto ni en disco;
+  se usa solo en memoria durante el Push/Clone vía `GIT_ASKPASS` temporal.
+- Las URLs remotas con credenciales se muestran siempre ocultando el
+  secreto.
+- `debug` desactivado.
+- Push solo admite remotos `https://`, por diseño (evita depender de
+  claves SSH configuradas en Termux).

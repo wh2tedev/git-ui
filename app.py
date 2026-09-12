@@ -1,267 +1,344 @@
 from flask import Flask, render_template, request, jsonify
-import os
-import re
-import shutil
-import subprocess
-import tempfile
+
+import gitops
+import store
 
 app = Flask(__name__)
-CURRENT_REPO = ""
+
+# Single-user, single-active-repo tool (matches how it's actually used on a
+# phone: one person, one project open at a time). Persisted recents let it
+# survive Termux killing the process.
+CURRENT_REPO = store.last_repo()
 
 
-def expand_path(path):
-    """Normalize only the path supplied by the user. Never fall back to the app folder."""
-    raw = (path or "").strip()
-    if not raw:
-        return ""
-    return os.path.realpath(os.path.abspath(os.path.expanduser(raw)))
+def _payload():
+    return request.get_json(silent=True) or request.form
 
 
-def run_command(command, repo_path=None, env=None, timeout=60, allow_error=False):
-    try:
-        result = subprocess.run(
-            command,
-            cwd=repo_path,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        output = (result.stdout or "").strip()
-        error = (result.stderr or "").strip()
-        if result.returncode != 0 and not allow_error:
-            return False, error or output or f"El comando terminó con código {result.returncode}."
-        return result.returncode == 0, output or error or "Completado sin salida."
-    except FileNotFoundError:
-        return False, "Git no está instalado o no está disponible en PATH."
-    except subprocess.TimeoutExpired:
-        return False, "El comando tardó demasiado y fue detenido."
-    except Exception as exc:
-        return False, str(exc)
+def _path_from(payload):
+    return gitops.expand_path(payload.get("repo_path", CURRENT_REPO))
 
 
-def git(command, repo_path=None, timeout=60, allow_error=False):
-    # Always target the exact path supplied by the user. On Android shared
-    # storage, Git may also complain about repository ownership, so explicitly
-    # mark this exact worktree as safe for this invocation.
-    cmd = ["git"]
-    if repo_path:
-        cmd += ["-c", f"safe.directory={repo_path}", "-C", repo_path]
-    cmd += command
-    return run_command(cmd, timeout=timeout, allow_error=allow_error)
-
-
-def valid_repo(path):
-    """Check the exact user-selected directory without relying on cwd."""
-    if not path or not os.path.isdir(path):
-        return False
-    git_dir = os.path.join(path, ".git")
-    if not (os.path.isdir(git_dir) or os.path.isfile(git_dir)):
-        return False
-    try:
-        result = subprocess.run(
-            ["git", "-c", f"safe.directory={path}", "-C", path,
-             "rev-parse", "--is-inside-work-tree"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            timeout=10, check=False
-        )
-        return result.returncode == 0 and result.stdout.strip().lower() == "true"
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
-def path_diagnostics(path):
-    """Return actionable diagnostics for Android/Termux shared storage."""
-    if not path:
-        return False, "Escribe la ruta de la carpeta del proyecto."
-    if not os.path.exists(path):
-        return False, f"La ruta no existe: {path}"
-    if not os.path.isdir(path):
-        return False, f"La ruta existe, pero no es una carpeta: {path}"
-    if not os.access(path, os.R_OK):
-        return False, f"Termux no puede leer esta carpeta: {path}. Ejecuta termux-setup-storage."
-    if not os.access(path, os.W_OK):
-        return False, f"Termux no puede escribir en esta carpeta: {path}. Ejecuta termux-setup-storage y vuelve a probar."
-    return True, f"Carpeta accesible: {path}"
-
-def mask_url(url):
-    if not url:
-        return "No configurado"
-    return re.sub(r"(https?://)([^/@:]+):([^/@]+)@", r"\1***:***@", url)
-
-
-def status_data(path):
-    data = {
-        "path": path,
-        "exists": bool(path) and os.path.isdir(path),
-        "is_git": valid_repo(path),
-        "git_installed": shutil.which("git") is not None,
-        "name": "",
-        "email": "",
-        "remote": "No configurado",
-        "branch": "Desconocida",
-        "status": "",
-        "has_changes": False,
-        "has_commits": False,
+def bundle(path):
+    """Full state needed to render either the wizard or the dashboard."""
+    data = gitops.status_data(path)
+    staged, unstaged, untracked = gitops.file_changes(path)
+    return {
+        "status": data,
+        "files": {"staged": staged, "unstaged": unstaged, "untracked": untracked},
+        "branches": gitops.list_branches(path),
+        "log": gitops.log_entries(path, limit=40),
+        "stashes": gitops.list_stashes(path),
+        "gitignore": gitops.read_gitignore(path) if data["is_git"] else "",
+        "recents": store.load_recents(),
     }
-    if not data["git_installed"] or not data["is_git"]:
-        return data
-
-    ok, out = git(["config", "user.name"], path, allow_error=True)
-    data["name"] = out if ok else ""
-    ok, out = git(["config", "user.email"], path, allow_error=True)
-    data["email"] = out if ok else ""
-    ok, out = git(["remote", "get-url", "origin"], path, allow_error=True)
-    data["remote"] = mask_url(out) if ok else "No configurado"
-    ok, out = git(["branch", "--show-current"], path, allow_error=True)
-    data["branch"] = out if ok and out else "(sin rama)"
-    ok, out = git(["status", "--short"], path, allow_error=True)
-    data["status"] = out
-    data["has_changes"] = bool(out.strip()) if ok else False
-    ok, out = git(["rev-parse", "--verify", "HEAD"], path, allow_error=True)
-    data["has_commits"] = ok
-    return data
 
 
 @app.route("/")
 def index():
-    return render_template("index.html", repo_path=CURRENT_REPO, data=status_data(CURRENT_REPO), feedback="")
+    return render_template("index.html", initial_path=CURRENT_REPO)
 
 
-@app.route("/api/status", methods=["POST"])
-def api_status():
+@app.route("/api/bootstrap", methods=["POST"])
+def api_bootstrap():
+    """Called on page load. Uses the given path, or falls back to the last one used."""
     global CURRENT_REPO
-    path = request.json.get("repo_path", CURRENT_REPO) if request.is_json else request.form.get("repo_path", CURRENT_REPO)
-    path = expand_path(path)
+    payload = _payload()
+    requested = (payload.get("repo_path") or "").strip() if hasattr(payload, "get") else ""
+    path = gitops.expand_path(requested) if requested else CURRENT_REPO
     CURRENT_REPO = path
-    return jsonify(status_data(path))
+    return jsonify(bundle(path))
 
+
+@app.route("/api/open", methods=["POST"])
+def api_open():
+    """Explicitly switch the active repo (used by the folder picker / recents list)."""
+    global CURRENT_REPO
+    payload = _payload()
+    path = gitops.expand_path(payload.get("repo_path", ""))
+    ok, message = gitops.path_diagnostics(path)
+    if not ok:
+        return jsonify(ok=False, message=message)
+    CURRENT_REPO = path
+    if gitops.valid_repo(path):
+        store.add_recent(path)
+    result = bundle(path)
+    result["ok"] = True
+    result["message"] = message
+    return jsonify(result)
+
+
+@app.route("/api/recent/remove", methods=["POST"])
+def api_recent_remove():
+    payload = _payload()
+    path = gitops.expand_path(payload.get("path", ""))
+    recents = store.remove_recent(path)
+    return jsonify(ok=True, recents=recents)
+
+
+# --------------------------------------------------------------- wizard --
+# Only the true one-time setup steps live here: git present, folder chosen,
+# repo initialized, identity set, remote linked. Everything else (staging,
+# committing, pushing, branches...) is a normal dashboard action available
+# any time, not a locked linear step.
 
 @app.route("/api/step", methods=["POST"])
 def api_step():
     global CURRENT_REPO
-    payload = request.get_json(silent=True) or request.form
+    payload = _payload()
     step = payload.get("step", "")
-    path = expand_path(payload.get("repo_path", CURRENT_REPO))
+    path = _path_from(payload)
     CURRENT_REPO = path
 
     if step == "check_git":
+        import shutil
         if shutil.which("git"):
-            ok, out = run_command(["git", "--version"])
+            ok, out = gitops.run_command(["git", "--version"])
             return jsonify(ok=ok, message=out)
         return jsonify(ok=False, message="Git no está instalado. En Termux ejecuta: pkg update && pkg install git")
 
     if step == "choose_folder":
-        ok, message = path_diagnostics(path)
+        ok, message = gitops.path_diagnostics(path)
         if not ok:
             return jsonify(ok=False, message=message)
         return jsonify(ok=True, path=path, message=message)
 
     if step == "init":
-        ok_path, path_message = path_diagnostics(path)
+        ok_path, path_message = gitops.path_diagnostics(path)
         if not ok_path:
             return jsonify(ok=False, message=path_message)
-        if valid_repo(path):
+        if gitops.valid_repo(path):
+            store.add_recent(path)
             return jsonify(ok=True, already=True, message="Git ya estaba inicializado en esta carpeta.")
-        ok, out = git(["init"], path)
+        ok, out = gitops.git(["init"], path)
         if not ok:
             return jsonify(ok=False, message=f"git init falló en {path}\n\n{out}")
-        # Verify the actual .git directory first; rev-parse is also checked
-        # with safe.directory for Android shared-storage ownership quirks.
-        if not (os.path.isdir(os.path.join(path, ".git")) or os.path.isfile(os.path.join(path, ".git"))):
-            return jsonify(ok=False, message=f"Git terminó sin error, pero no apareció .git en:\n{path}\n\nSalida: {out}")
-        if not valid_repo(path):
-            return jsonify(ok=False, message=f"Se creó .git, pero Git no puede abrir el repositorio en:\n{path}\n\nEsto suele indicar permisos de almacenamiento en Termux.")
+        if not gitops.valid_repo(path):
+            return jsonify(ok=False, message=f"Git terminó sin error, pero no se pudo abrir el repositorio en:\n{path}\n\nEsto suele indicar permisos de almacenamiento en Termux. Ejecuta termux-setup-storage.")
+        store.add_recent(path)
         return jsonify(ok=True, message=out if out else f"Repositorio Git creado en {path}")
 
+    if step == "clone":
+        url = (payload.get("clone_url") or "").strip()
+        token = (payload.get("token") or "").strip()
+        if not url:
+            return jsonify(ok=False, message="Pega la URL HTTPS del repositorio a clonar.")
+        ok, out = gitops.clone_repo(path, url, token)
+        if ok:
+            store.add_recent(path)
+        return jsonify(ok=ok, message=out)
+
     if step == "identity":
-        name = payload.get("name", "").strip()
-        email = payload.get("email", "").strip()
-        if not os.path.isdir(path):
-            return jsonify(ok=False, message="La carpeta del proyecto no existe.")
-        if not valid_repo(path):
-            # The browser progress indicator is only cosmetic; verify the real
-            # repository on disk and give a precise recovery action.
-            return jsonify(ok=False, message="Esta carpeta todavía no tiene un repositorio Git válido. Vuelve al paso 3 y pulsa «Inicializar Git».")
+        name = (payload.get("name") or "").strip()
+        email = (payload.get("email") or "").strip()
+        if not gitops.valid_repo(path):
+            return jsonify(ok=False, message="Esta carpeta todavía no tiene un repositorio Git válido. Vuelve al paso anterior e inicialízalo.")
         if not name or not email:
             return jsonify(ok=False, message="Escribe tu nombre y correo de Git.")
-        # Explicitly write to this repository's local .git/config.
-        ok1, out1 = git(["config", "--local", "user.name", name], path)
-        ok2, out2 = git(["config", "--local", "user.email", email], path) if ok1 else (False, "No se pudo guardar el nombre.")
-        if ok1 and ok2:
-            return jsonify(ok=True, message="Identidad guardada correctamente en este repositorio.")
-        return jsonify(ok=False, message=out1 if not ok1 else out2)
+        ok, message = gitops.set_identity(path, name, email)
+        return jsonify(ok=ok, message=message)
 
     if step == "remote":
-        url = payload.get("remote_url", "").strip()
-        if not valid_repo(path):
+        url = (payload.get("remote_url") or "").strip()
+        if not gitops.valid_repo(path):
             return jsonify(ok=False, message="Primero inicializa Git.")
         if not url.startswith(("https://", "http://", "git@", "ssh://")):
             return jsonify(ok=False, message="Introduce una URL válida de GitHub, por ejemplo https://github.com/usuario/repo.git")
-        ok, existing = git(["remote", "get-url", "origin"], path, allow_error=True)
-        if ok:
-            ok, out = git(["remote", "set-url", "origin", url], path)
-        else:
-            ok, out = git(["remote", "add", "origin", url], path)
+        ok, out = gitops.set_remote(path, url)
         return jsonify(ok=ok, message=out if out else "Repositorio remoto configurado.")
 
-    if step == "add":
-        if not valid_repo(path):
-            return jsonify(ok=False, message="No hay un repositorio Git válido.")
-        ok, out = git(["add", "."], path)
-        return jsonify(ok=ok, message=out if out else "Archivos preparados con git add .")
-
-    if step == "commit":
-        message = payload.get("message", "").strip()
-        if not message:
-            return jsonify(ok=False, message="Escribe un mensaje para el commit.")
-        if not valid_repo(path):
-            return jsonify(ok=False, message="No hay un repositorio Git válido.")
-        ok, out = git(["commit", "-m", message], path)
-        return jsonify(ok=ok, message=out)
-
-    if step == "branch":
-        if not valid_repo(path):
-            return jsonify(ok=False, message="No hay un repositorio Git válido.")
-        ok, out = git(["branch", "-M", "main"], path)
-        return jsonify(ok=ok, message=out if out else "La rama actual ahora es main.")
-
-    if step == "push":
-        token = payload.get("token", "").strip()
-        force = bool(payload.get("force", False))
-        if not valid_repo(path):
-            return jsonify(ok=False, message="No hay un repositorio Git válido.")
-        if not token:
-            return jsonify(ok=False, message="Introduce tu token de GitHub para hacer Push.")
-        remote_ok, remote = git(["remote", "get-url", "origin"], path)
-        if not remote_ok:
-            return jsonify(ok=False, message="No hay un remoto origin configurado.")
-        if not remote.startswith(("https://", "http://")):
-            return jsonify(ok=False, message="Este asistente usa autenticación por HTTPS. Configura origin con una URL https:// de GitHub.")
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            askpass = f.name
-            f.write("#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' \"$GIT_USERNAME\" ;;\n  *) printf '%s\\n' \"$GIT_PASSWORD\" ;;\nesac\n")
-        os.chmod(askpass, 0o700)
-        env = os.environ.copy()
-        env["GIT_ASKPASS"] = askpass
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        env["GIT_USERNAME"] = "git"
-        env["GIT_PASSWORD"] = token
-        try:
-            push_args = ["push", "-u", "origin", "main"]
-            if force:
-                push_args.insert(1, "--force")
-            ok, out = run_command(["git", "-c", f"safe.directory={path}", "-C", path, *push_args], env=env, timeout=120)
-        finally:
-            try:
-                os.remove(askpass)
-            except OSError:
-                pass
-        return jsonify(ok=ok, message=out)
-
     return jsonify(ok=False, message="Paso desconocido."), 400
+
+
+# ------------------------------------------------------------- dashboard --
+
+def _require_repo(path):
+    return gitops.valid_repo(path)
+
+
+@app.route("/api/diff", methods=["POST"])
+def api_diff():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    filename = payload.get("file") or None
+    staged = bool(payload.get("staged", False))
+    return jsonify(ok=True, diff=gitops.diff_text(path, filename, staged))
+
+
+@app.route("/api/add", methods=["POST"])
+def api_add():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    files = payload.get("files") or None
+    ok, out = gitops.add_files(path, files)
+    return jsonify(ok=ok, message=out if out else "Archivos preparados.")
+
+
+@app.route("/api/unstage", methods=["POST"])
+def api_unstage():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    files = payload.get("files") or None
+    ok, out = gitops.unstage_files(path, files)
+    return jsonify(ok=ok, message=out if out else "Cambios sin preparar.")
+
+
+@app.route("/api/discard", methods=["POST"])
+def api_discard():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    files = payload.get("files") or []
+    if not files:
+        return jsonify(ok=False, message="No se indicaron archivos.")
+    ok, out = gitops.discard_files(path, files)
+    return jsonify(ok=ok, message=out if out else "Cambios descartados.")
+
+
+@app.route("/api/remove_untracked", methods=["POST"])
+def api_remove_untracked():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    files = payload.get("files") or []
+    if not files:
+        return jsonify(ok=False, message="No se indicaron archivos.")
+    ok, out = gitops.remove_untracked(path, files)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/commit", methods=["POST"])
+def api_commit():
+    payload = _payload()
+    path = _path_from(payload)
+    message = (payload.get("message") or "").strip()
+    if not message:
+        return jsonify(ok=False, message="Escribe un mensaje para el commit.")
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.commit(path, message)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/pull", methods=["POST"])
+def api_pull():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.pull(path)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/push", methods=["POST"])
+def api_push():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    token = (payload.get("token") or "").strip()
+    force = bool(payload.get("force", False))
+    branch = (payload.get("branch") or "").strip() or None
+    ok, out = gitops.push(path, token, branch=branch, force=force)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/branch/rename", methods=["POST"])
+def api_branch_rename():
+    payload = _payload()
+    path = _path_from(payload)
+    name = (payload.get("name") or "main").strip()
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.rename_branch(path, name)
+    return jsonify(ok=ok, message=out if out else f"La rama actual ahora es {name}.")
+
+
+@app.route("/api/branch/create", methods=["POST"])
+def api_branch_create():
+    payload = _payload()
+    path = _path_from(payload)
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return jsonify(ok=False, message="Escribe un nombre de rama.")
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.create_branch(path, name)
+    return jsonify(ok=ok, message=out if out else f"Rama {name} creada.")
+
+
+@app.route("/api/branch/switch", methods=["POST"])
+def api_branch_switch():
+    payload = _payload()
+    path = _path_from(payload)
+    name = (payload.get("name") or "").strip()
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.switch_branch(path, name)
+    return jsonify(ok=ok, message=out if out else f"Cambiado a {name}.")
+
+
+@app.route("/api/branch/delete", methods=["POST"])
+def api_branch_delete():
+    payload = _payload()
+    path = _path_from(payload)
+    name = (payload.get("name") or "").strip()
+    force = bool(payload.get("force", False))
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.delete_branch(path, name, force)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/stash/save", methods=["POST"])
+def api_stash_save():
+    payload = _payload()
+    path = _path_from(payload)
+    message = (payload.get("message") or "").strip()
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.stash_save(path, message)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/stash/pop", methods=["POST"])
+def api_stash_pop():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.stash_pop(path)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/stash/drop", methods=["POST"])
+def api_stash_drop():
+    payload = _payload()
+    path = _path_from(payload)
+    ref = (payload.get("ref") or "stash@{0}").strip()
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    ok, out = gitops.stash_drop(path, ref)
+    return jsonify(ok=ok, message=out)
+
+
+@app.route("/api/gitignore/save", methods=["POST"])
+def api_gitignore_save():
+    payload = _payload()
+    path = _path_from(payload)
+    if not _require_repo(path):
+        return jsonify(ok=False, message="No hay un repositorio Git válido.")
+    content = payload.get("content", "")
+    ok, message = gitops.write_gitignore(path, content)
+    return jsonify(ok=ok, message=message)
 
 
 if __name__ == "__main__":

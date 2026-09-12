@@ -1,227 +1,231 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Git Web Dashboard</title>
-    <style>
-        body { font-family: monospace; background: #0f172a; color: #e2e8f0; padding: 20px; max-width: 950px; margin: auto; }
-        h1, h2 { color: #38bdf8; }
-        .card { background: #1e293b; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
-        pre { background: #090d16; padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
-        button, input { background: #38bdf8; border: none; padding: 10px 15px; border-radius: 4px; color: #0f172a; font-weight: bold; cursor: pointer; }
-        button:hover { background: #7dd3fc; }
-        button:disabled { opacity: .45; cursor: not-allowed; }
-        input[type="text"], input[type="password"] { background: #334155; color: white; width: 65%; padding: 10px; border-radius: 4px; border: 1px solid #475569; box-sizing: border-box; }
-        .form-grid { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
-        .alert { background: #1e293b; color: #38bdf8; padding: 15px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; border: 1px solid #38bdf8; white-space: pre-wrap; word-break: break-all; }
-        .progress { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; margin: 18px 0; }
-        .dot { background: #334155; border-radius: 4px; padding: 8px 4px; text-align: center; color: #94a3b8; font-size: 12px; }
-        .dot.active { background: #38bdf8; color: #0f172a; }
-        .dot.done { background: #166534; color: #dcfce7; }
-        .step { display: none; }
-        .step.active { display: block; }
-        .step.locked { opacity: .55; }
-        .step-number { color: #38bdf8; font-weight: bold; }
-        .hint { color: #94a3b8; line-height: 1.5; }
-        code { color: #7dd3fc; }
-        .result { margin-top: 12px; padding: 10px; background: #090d16; border-radius: 4px; white-space: pre-wrap; word-break: break-word; display: none; }
-        .result.show { display: block; }
-        .success { border-left: 3px solid #4ade80; }
-        .error { border-left: 3px solid #f87171; }
-        .wide { width: 100% !important; }
-        @media (max-width: 650px) { body { padding: 12px; } .progress { grid-template-columns: repeat(3, 1fr); } input[type="text"], input[type="password"] { width: 100% !important; } button { width: 100%; } }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Git UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <h1>Git Dashboard</h1>
-    <div class="alert" id="topStatus">Sigue los pasos en orden. La web comprobará cada paso antes de desbloquear el siguiente.</div>
+<body data-initial-path="{{ initial_path }}">
 
-    <div style="margin-bottom:10px; color:#94a3b8; font-size:12px;">La barra superior muestra tu progreso real. Si un paso falla, no se desbloquea el siguiente.</div>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">$</span> git-ui</div>
+  <button class="repo-pill" id="repoPill" type="button" title="Cambiar repositorio">
+    <span id="repoPillLabel">Sin proyecto</span>
+  </button>
+</header>
 
-    <div class="progress" id="progress">
-        <div class="dot active">1<br>Git</div><div class="dot">2<br>Carpeta</div><div class="dot">3<br>Init</div>
-        <div class="dot">4<br>Identidad</div><div class="dot">5<br>GitHub</div><div class="dot">6<br>Add</div>
-        <div class="dot">7<br>Commit</div><div class="dot">8<br>Main</div><div class="dot">9<br>Push</div>
+<main id="app">
+
+  <!-- ============================= REPO PICKER ============================= -->
+  <section id="pickerView" class="view">
+    <div class="panel">
+      <h1>Abrir proyecto</h1>
+      <p class="muted">Escribe la ruta de una carpeta en tu almacenamiento, o elige un proyecto reciente.</p>
+      <div class="field-row">
+        <input type="text" id="pickerPath" placeholder="/data/data/com.termux/files/home/projects/mi-app" spellcheck="false" autocapitalize="off" autocorrect="off">
+        <button class="btn btn-primary" id="pickerOpenBtn">Abrir</button>
+      </div>
+      <div id="pickerFeedback" class="feedback"></div>
+
+      <div id="recentsBlock">
+        <h2>Recientes</h2>
+        <ul class="recents-list" id="recentsList"></ul>
+      </div>
+
+      <details class="clone-details">
+        <summary>¿Vas a clonar un repositorio de GitHub que aún no tienes en el teléfono?</summary>
+        <div class="field-col">
+          <input type="text" id="cloneUrl" placeholder="https://github.com/usuario/repo.git" spellcheck="false" autocapitalize="off" autocorrect="off">
+          <input type="password" id="cloneToken" placeholder="Token de GitHub (solo si el repo es privado)">
+          <button class="btn btn-outline" id="cloneBtn">Clonar en la ruta de arriba</button>
+        </div>
+      </details>
     </div>
+  </section>
 
-    <section class="card step active" data-step="1">
-        <h2><span class="step-number">PASO 1 —</span> Comprobar Git</h2>
+  <!-- ============================== WIZARD VIEW ============================= -->
+  <section id="wizardView" class="view">
+    <div class="panel">
+      <div class="progress" id="progress">
+        <div class="dot" data-dot="1">Git</div>
+        <div class="dot" data-dot="2">Init</div>
+        <div class="dot" data-dot="3">Identidad</div>
+        <div class="dot" data-dot="4">GitHub</div>
+      </div>
+
+      <section class="step" data-step="1">
+        <h2>Comprobar Git</h2>
         <p class="hint">Primero comprobamos que Git exista en Termux.</p>
-        <pre>pkg update
-pkg install git
+        <pre>pkg update &amp;&amp; pkg install git
 git --version</pre>
-        <button onclick="runStep('check_git', 1)">Comprobar Git</button>
-        <div class="result" id="result1"></div>
+        <button class="btn btn-primary" data-action="check_git" data-step-btn="1">Comprobar Git</button>
+        <div class="result" id="result-check_git"></div>
+      </section>
+
+      <section class="step" data-step="2">
+        <h2>Inicializar el repositorio</h2>
+        <p class="hint">Esto ejecuta <code>git init</code> exactamente en <code id="initPathLabel"></code>, sin depender de dónde esté instalada esta app.</p>
+        <pre>git init</pre>
+        <button class="btn btn-primary" data-action="init" data-step-btn="2">Inicializar Git</button>
+        <div class="result" id="result-init"></div>
+      </section>
+
+      <section class="step" data-step="3">
+        <h2>Configurar identidad</h2>
+        <p class="hint">Se guarda dentro de este repositorio, como <code>git config --local</code>.</p>
+        <div class="field-col">
+          <input type="text" id="gitName" placeholder="Tu nombre">
+          <input type="text" id="gitEmail" placeholder="tu-correo@example.com">
+        </div>
+        <button class="btn btn-primary" data-action="identity" data-step-btn="3">Guardar identidad</button>
+        <div class="result" id="result-identity"></div>
+      </section>
+
+      <section class="step" data-step="4">
+        <h2>Conectar con GitHub</h2>
+        <p class="hint">Crea el repositorio vacío en GitHub y pega aquí su URL HTTPS. Puedes hacerlo más tarde desde Configuración si aún no lo tienes.</p>
+        <div class="field-row">
+          <input type="text" id="remoteUrl" placeholder="https://github.com/usuario/repo.git" spellcheck="false" autocapitalize="off">
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" data-action="remote" data-step-btn="4">Vincular GitHub</button>
+          <button class="btn btn-ghost" id="skipRemoteBtn">Omitir por ahora</button>
+        </div>
+        <div class="result" id="result-remote"></div>
+      </section>
+
+      <div class="btn-row wizard-nav">
+        <button class="btn btn-ghost" id="wizardDoneBtn" style="display:none;">Ir al panel →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= DASHBOARD VIEW ============================ -->
+  <section id="dashboardView" class="view">
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="estado">Estado</button>
+      <button class="tab" data-tab="ramas">Ramas</button>
+      <button class="tab" data-tab="historial">Historial</button>
+      <button class="tab" data-tab="config">Config</button>
+    </nav>
+
+    <!-- ---- ESTADO ---- -->
+    <section class="tab-panel active" data-tab-panel="estado">
+      <div class="statusbar" id="statusbar"></div>
+
+      <div class="panel-row">
+        <button class="btn btn-outline" id="pullBtn">↓ Pull</button>
+        <button class="btn btn-primary" id="pushBtn">↑ Push</button>
+        <button class="btn btn-ghost" id="stashBtn">Guardar en stash</button>
+      </div>
+      <div class="result" id="result-syncop"></div>
+
+      <div id="stashList" class="stash-list"></div>
+
+      <div class="filegroup" id="group-staged">
+        <div class="filegroup-head">
+          <h3><span class="dot-marker staged"></span>Preparados para commit</h3>
+          <button class="btn-mini" data-bulk="unstage-all">Quitar todo</button>
+        </div>
+        <ul class="filelist" id="list-staged"></ul>
+      </div>
+
+      <div class="commitbox">
+        <input type="text" id="commitMessage" placeholder="Mensaje del commit...">
+        <button class="btn btn-primary" id="commitBtn">Commit</button>
+      </div>
+      <div class="result" id="result-commit"></div>
+
+      <div class="filegroup" id="group-unstaged">
+        <div class="filegroup-head">
+          <h3><span class="dot-marker unstaged"></span>Cambios sin preparar</h3>
+          <button class="btn-mini" data-bulk="add-all">Preparar todo</button>
+        </div>
+        <ul class="filelist" id="list-unstaged"></ul>
+      </div>
+
+      <div class="filegroup" id="group-untracked">
+        <div class="filegroup-head">
+          <h3><span class="dot-marker untracked"></span>Sin seguimiento</h3>
+          <button class="btn-mini" data-bulk="add-all">Preparar todo</button>
+        </div>
+        <ul class="filelist" id="list-untracked"></ul>
+      </div>
+
+      <p class="empty-note" id="noChangesNote" style="display:none;">No hay cambios pendientes. Tu árbol de trabajo está limpio.</p>
     </section>
 
-    <section class="card step" data-step="2">
-        <h2><span class="step-number">PASO 2 —</span> Elegir carpeta del proyecto</h2>
-        <p class="hint">Esta ruta manda. La app ejecutará Git <strong>exactamente aquí</strong>; no usará la carpeta donde está instalada la web.</p>
-        <form onsubmit="return runStep('choose_folder', 2, event)">
-            <input class="wide" id="repoPath" type="text" value="{{ repo_path }}" placeholder="/sdcard/Download/projects/mi-proyecto" required>
-            <div class="form-grid"><button type="submit">Cargar carpeta</button></div>
-        </form>
-        <div class="result" id="result2"></div>
+    <!-- ---- RAMAS ---- -->
+    <section class="tab-panel" data-tab-panel="ramas">
+      <div id="renameMainHint" style="display:none;" class="feedback show pending">
+        <span id="renameMainText"></span>
+        <button class="btn-mini" id="renameMainBtn" style="margin-left:8px;">Renombrar a main</button>
+      </div>
+      <div class="field-row">
+        <input type="text" id="newBranchName" placeholder="nombre-de-rama-nueva">
+        <button class="btn btn-primary" id="createBranchBtn">Crear</button>
+      </div>
+      <div class="result" id="result-branch"></div>
+      <ul class="branch-list" id="branchList"></ul>
     </section>
 
-    <section class="card step" data-step="3">
-        <h2><span class="step-number">PASO 3 —</span> Inicializar Git</h2>
-        <p class="hint">Equivale a ejecutar <code>git init</code> dentro de la carpeta.</p>
-        <pre id="initCommand">cd {{ repo_path }}
-git init</pre>
-        <button onclick="runStep('init', 3)">Inicializar Git</button>
-        <div class="result" id="result3"></div>
+    <!-- ---- HISTORIAL ---- -->
+    <section class="tab-panel" data-tab-panel="historial">
+      <ul class="log-list" id="logList"></ul>
     </section>
 
-    <section class="card step" data-step="4">
-        <h2><span class="step-number">PASO 4 —</span> Configurar identidad</h2>
-        <p class="hint">Estos datos se guardan dentro de este repositorio, igual que usando <code>git config --local</code> en Termux.</p>
-        <form onsubmit="return runStep('identity', 4, event)">
-            <div class="form-grid">
-                <input id="gitName" type="text" placeholder="Tu nombre" value="{{ data.name }}" required>
-                <input id="gitEmail" type="text" placeholder="tu-correo@example.com" value="{{ data.email }}" required>
-            </div>
-            <div class="form-grid"><button type="submit">Guardar identidad</button></div>
-        </form>
-        <div class="result" id="result4"></div>
+    <!-- ---- CONFIG ---- -->
+    <section class="tab-panel" data-tab-panel="config">
+      <div class="config-block">
+        <h3>Identidad</h3>
+        <div class="field-col">
+          <input type="text" id="cfgName" placeholder="Tu nombre">
+          <input type="text" id="cfgEmail" placeholder="tu-correo@example.com">
+        </div>
+        <button class="btn btn-outline" id="cfgIdentityBtn">Guardar identidad</button>
+        <div class="result" id="result-cfgIdentity"></div>
+      </div>
+
+      <div class="config-block">
+        <h3>Remoto (origin)</h3>
+        <div class="field-row">
+          <input type="text" id="cfgRemote" placeholder="https://github.com/usuario/repo.git" spellcheck="false" autocapitalize="off">
+        </div>
+        <button class="btn btn-outline" id="cfgRemoteBtn">Guardar remoto</button>
+        <div class="result" id="result-cfgRemote"></div>
+      </div>
+
+      <div class="config-block">
+        <h3>.gitignore</h3>
+        <textarea id="cfgGitignore" rows="8" spellcheck="false" placeholder="node_modules/&#10;__pycache__/&#10;.env"></textarea>
+        <button class="btn btn-outline" id="cfgGitignoreBtn">Guardar .gitignore</button>
+        <div class="result" id="result-cfgGitignore"></div>
+      </div>
+
+      <div class="config-block">
+        <button class="btn btn-ghost" id="changeRepoBtn">Cambiar de proyecto</button>
+      </div>
     </section>
+  </section>
 
-    <section class="card step" data-step="5">
-        <h2><span class="step-number">PASO 5 —</span> Conectar repositorio de GitHub</h2>
-        <p class="hint">Crea el repositorio vacío en GitHub y pega aquí su URL HTTPS.</p>
-        <pre>git remote add origin https://github.com/USUARIO/REPOSITORIO.git</pre>
-        <input class="wide" id="remoteUrl" type="text" placeholder="https://github.com/tu-usuario/tu-repo.git" value="">
-        <div class="form-grid"><button onclick="runStep('remote', 5)">Vincular GitHub</button></div>
-        <div class="result" id="result5"></div>
-    </section>
+</main>
 
-    <section class="card step" data-step="6">
-        <h2><span class="step-number">PASO 6 —</span> Preparar archivos</h2>
-        <p class="hint">Ahora añadimos todos los archivos con <code>git add .</code>.</p>
-        <pre>git add .</pre>
-        <button onclick="runStep('add', 6)">Hacer Git Add</button>
-        <div class="result" id="result6"></div>
-    </section>
+<!-- ============================== DIFF / PROMPT MODAL ============================== -->
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <h3 id="modalTitle"></h3>
+      <button class="modal-close" id="modalClose">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-actions" id="modalActions"></div>
+  </div>
+</div>
 
-    <section class="card step" data-step="7">
-        <h2><span class="step-number">PASO 7 —</span> Crear el commit</h2>
-        <p class="hint">El commit guarda una versión de los cambios preparados.</p>
-        <pre>git commit -m "Tu mensaje"</pre>
-        <input class="wide" id="commitMessage" type="text" placeholder="Mensaje del commit..." value="Initial commit">
-        <div class="form-grid"><button onclick="runStep('commit', 7)">Crear commit</button></div>
-        <div class="result" id="result7"></div>
-    </section>
-
-    <section class="card step" data-step="8">
-        <h2><span class="step-number">PASO 8 —</span> Establecer la rama main</h2>
-        <p class="hint">Dejamos la rama principal con el nombre <code>main</code>.</p>
-        <pre>git branch -M main</pre>
-        <button onclick="runStep('branch', 8)">Usar main</button>
-        <div class="result" id="result8"></div>
-    </section>
-
-    <section class="card step" data-step="9">
-        <h2><span class="step-number">PASO 9 —</span> Push a GitHub</h2>
-        <p class="hint">Último paso: subimos la rama <code>main</code>. El token se usa solo durante este Push y no se guarda en el remoto.</p>
-        <pre>git push -u origin main</pre>
-        <input class="wide" id="gitToken" type="password" placeholder="Token de GitHub (PAT)">
-        <label style="display:flex;align-items:flex-start;gap:9px;margin:12px 0;color:#fbbf24;line-height:1.45;cursor:pointer;">
-            <input id="forcePush" type="checkbox" style="margin-top:3px;width:auto;">
-            <span><strong>Forzar Push / sobrescribir remoto</strong><br><small style="color:#94a3b8;">Usa <code>git push --force</code>. Reemplaza la rama <code>main</code> de GitHub con tu versión local. Úsalo solo si estás seguro.</small></span>
-        </label>
-        <div class="form-grid"><button onclick="runStep('push', 9)">Hacer Push 🚀</button></div>
-        <div class="result" id="result9"></div>
-    </section>
-
-    <section class="card" id="finalCard" style="display:none;">
-        <h2>✅ Repositorio listo</h2>
-        <p>Tu proyecto terminó el flujo completo y fue enviado a GitHub.</p>
-        <pre id="finalInfo"></pre>
-    </section>
-
-<script>
-let currentStep = 1;
-const completed = new Set();
-
-function repoPath() { return document.getElementById('repoPath').value.trim(); }
-function updateRepoPathText(path) {
-    const el = document.getElementById('initCommand');
-    if (el) el.textContent = 'cd ' + path + '\ngit init';
-}
-
-
-function showResult(step, ok, message) {
-    const el = document.getElementById('result' + step);
-    el.textContent = (ok ? '✓ ' : '✕ ') + message;
-    el.className = 'result show ' + (ok ? 'success' : 'error');
-}
-
-function updateProgress() {
-    document.querySelectorAll('.dot').forEach((dot, i) => {
-        const n = i + 1;
-        dot.classList.toggle('active', n === currentStep);
-        dot.classList.toggle('done', completed.has(n));
-    });
-}
-
-function goToStep(n) {
-    currentStep = n;
-    document.querySelectorAll('.step').forEach(s => s.classList.toggle('active', Number(s.dataset.step) === n));
-    updateProgress();
-    window.scrollTo({top: 0, behavior: 'smooth'});
-}
-
-async function runStep(action, step, formEvent) {
-    if (formEvent && formEvent.preventDefault) formEvent.preventDefault();
-    const payload = {step: action, repo_path: repoPath()};
-    if (action === 'identity') { payload.name = document.getElementById('gitName').value; payload.email = document.getElementById('gitEmail').value; }
-    if (action === 'remote') payload.remote_url = document.getElementById('remoteUrl').value;
-    if (action === 'commit') payload.message = document.getElementById('commitMessage').value;
-    if (action === 'push') { payload.token = document.getElementById('gitToken').value; payload.force = document.getElementById('forcePush').checked; }
-
-    const result = document.getElementById('result' + step);
-    result.textContent = '⏳ Ejecutando...';
-    result.className = 'result show';
-    try {
-        const response = await fetch('/api/step', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-        const data = await response.json();
-        showResult(step, data.ok, data.message);
-        if (!data.ok) return false;
-        if (step === 2 && data.path) {
-            document.getElementById('repoPath').value = data.path;
-            updateRepoPathText(data.path);
-        }
-        completed.add(step);
-
-        // After initializing Git, ask the server to verify the repository
-        // really exists on disk before advancing. This prevents a green UI
-        // state when the next backend check would fail.
-        if (step === 3) {
-            const check = await fetch('/api/status', {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({repo_path: repoPath()})
-            });
-            const state = await check.json();
-            if (!state.is_git) {
-                completed.delete(3);
-                showResult(3, false, 'Git init no quedó disponible en esta carpeta. Revisa la ruta y vuelve a intentarlo.');
-                return false;
-            }
-        }
-        if (step < 9) goToStep(step + 1);
-        else {
-            document.getElementById('finalCard').style.display = 'block';
-            document.getElementById('finalInfo').textContent = 'Ruta: ' + repoPath() + '\nRepositorio: ' + (document.getElementById('remoteUrl').value || 'origin') + '\nRama: main';
-            document.getElementById('topStatus').textContent = '✓ Flujo completado correctamente.';
-        }
-        return false;
-    } catch (e) {
-        showResult(step, false, 'No se pudo comunicar con la aplicación: ' + e.message);
-        return false;
-    }
-}
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>
